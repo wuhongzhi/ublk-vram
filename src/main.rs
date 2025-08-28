@@ -14,7 +14,7 @@ use std::sync::Arc;
 /// Command line arguments for the VRAM Block Device
 #[derive(Parser, Debug)]
 #[clap(
-    name = "vramblk",
+    name = "ublk-vram",
     about = "Expose GPU memory as a block device using a UBLK. Locks memory using mlockall.",
     version
 )]
@@ -60,19 +60,18 @@ pub(crate) fn parse_size_string(size_str: &str) -> Result<u64> {
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    if args.list_devices {
-        return list_opencl_devices();
-    }
     if args.verbose {
         Builder::from_env(Env::default().default_filter_or("debug")).init();
     } else {
         Builder::from_env(Env::default().default_filter_or("info")).init();
     }
 
-    log::info!("Starting VRAM Block Device (ublk)");
-    log::info!("Attempting to lock process memory using mlockall()...");
+    if args.list_devices {
+        return list_opencl_devices();
+    }
 
     // Use correct flag names from the MlockAllFlags type
+    log::info!("Attempting to lock process memory using mlockall()...");
     match mlockall(MlockAllFlags::MCL_CURRENT | MlockAllFlags::MCL_FUTURE) {
         Ok(_) => log::info!("Successfully locked process memory."),
         Err(e) => {
@@ -106,8 +105,9 @@ fn main() -> Result<()> {
         vram.device_name()
     );
 
+    log::info!("Starting VRAM Block Device (UBLK)");
     let _ = start_ublk_server(vram);
-    log::info!("VRAM ublk Device has shut down.");
+    log::info!("VRAM Device has shutdown.");
 
     Ok(())
 }
