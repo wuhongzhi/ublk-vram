@@ -1,0 +1,27 @@
+[package]
+name = "ublk-vram"
+version = "0.1.0"
+edition = "2024"
+authors = ["Jacky WU <hongzhi.wu@139.com>"]
+description = "A block device that exposes GPU memory to userspace via ublk."
+license = "MIT"
+keywords = ["opencl", "gpu", "block-device", "swap"]
+categories = ["command-line-utilities"]
+
+[[bin]]
+name = "ublk-vram"
+path = "src/main.rs"
+
+[dependencies]
+opencl3 = "0.12"
+nix = "0.26"
+clap = { version = "4.3", features = ["derive"] }
+anyhow = "1.0"
+log = "0.4"
+env_logger = "0.10"
+libc = "0.2"
+libublk = "0.4"
+smol = "2.0"
+futures ="0.3"
+num_cpus = "1.17"
+ctrlc = "3.4"
