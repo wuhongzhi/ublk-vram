@@ -9,7 +9,6 @@ use anyhow::{Context, Result, bail};
 use clap::Parser;
 use env_logger::{Builder, Env};
 use nix::sys::mman::{MlockAllFlags, mlockall};
-use std::sync::Arc;
 
 /// Command line arguments for the VRAM Block Device
 #[derive(Parser, Debug)]
@@ -65,13 +64,13 @@ fn main() -> Result<()> {
     } else {
         Builder::from_env(Env::default().default_filter_or("info")).init();
     }
-
     if args.list_devices {
         return list_opencl_devices();
     }
 
-    // Use correct flag names from the MlockAllFlags type
     log::info!("Attempting to lock process memory using mlockall()...");
+
+    // Use correct flag names from the MlockAllFlags type
     match mlockall(MlockAllFlags::MCL_CURRENT | MlockAllFlags::MCL_FUTURE) {
         Ok(_) => log::info!("Successfully locked process memory."),
         Err(e) => {
@@ -95,8 +94,8 @@ fn main() -> Result<()> {
         device_index: args.device,
         platform_index: args.platform,
     };
-    let vram: Arc<VRamBuffer> =
-        Arc::new(VRamBuffer::new(&vram_config).context("Failed to allocate GPU memory")?);
+    let vram =
+        VRamBuffer::new(&vram_config).context("Failed to allocate GPU memory")?;
 
     log::info!(
         "Successfully allocated {} bytes ({} MB) on {}",
@@ -107,7 +106,7 @@ fn main() -> Result<()> {
 
     log::info!("Starting VRAM Block Device (UBLK)");
     let _ = start_ublk_server(vram);
-    log::info!("VRAM Device has shutdown.");
+    log::info!("VRAM Block Device has shut down.");
 
     Ok(())
 }

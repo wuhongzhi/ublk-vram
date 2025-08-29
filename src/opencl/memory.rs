@@ -12,9 +12,9 @@ use opencl3::{
     platform::{self as cl_platform},
     types,
 };
-// Use std::sync::Mutex for thread-safe interior mutability
+// Use std::sync::RwLock for thread-safe interior mutability
 use std::ptr;
-use std::sync::{Arc, Mutex};
+use std::sync::RwLock;
 
 /// Configuration for a GPU memory buffer
 #[derive(Debug, Clone)]
@@ -38,11 +38,11 @@ impl Default for VRamBufferConfig {
 }
 
 /// A buffer allocated in GPU VRAM via OpenCL
-// Make VRamBuffer Send + Sync by using Mutex for the buffer
+// Make VRamBuffer Send + Sync by using RwLock for the buffer
 pub struct VRamBuffer {
-    queue: Arc<CommandQueue>,
-    // Use Mutex instead of RefCell
-    buffer: Mutex<Buffer<u8>>,
+    queue: CommandQueue,
+    // Use RwLock instead of RefCell
+    buffer: RwLock<Buffer<u8>>,
     size: usize,
     device: Device,
 }
@@ -85,11 +85,9 @@ impl VRamBuffer {
         }
         let device_id = device_ids[config.device_index];
         let device = Device::new(device_id);
+        let context = ClContext::from_device(&device).context("Failed to create OpenCL context")?;
 
-        let context =
-            Arc::new(ClContext::from_device(&device).context("Failed to create OpenCL context")?);
-
-        let queue = Arc::new(unsafe {
+        let queue = unsafe {
             CommandQueue::create_with_properties(
                 &context,
                 device.id(),
@@ -97,7 +95,7 @@ impl VRamBuffer {
                 0,
             )
             .context("Failed to create command queue")?
-        });
+        };
 
         let buffer = unsafe {
             Buffer::<u8>::create(
@@ -119,7 +117,7 @@ impl VRamBuffer {
 
         Ok(Self {
             queue,
-            buffer: Mutex::new(buffer),
+            buffer: RwLock::new(buffer),
             size: config.size,
             device,
         })
@@ -138,12 +136,12 @@ impl VRamBuffer {
 
         let buffer_guard = self
             .buffer
-            .lock()
+            .read()
             .map_err(|_| anyhow::anyhow!("Failed to lock buffer mutex for read"))?;
 
         unsafe {
             self.queue
-                .enqueue_read_buffer(&*buffer_guard, types::CL_FALSE, offset, data, &[])
+                .enqueue_read_buffer(&*buffer_guard, types::CL_TRUE, offset, data, &[])
                 .context("Failed to enqueue non-blocking read from buffer")?
                 .wait()
                 .context("Failed waiting for non-blocking read event")?;
@@ -160,12 +158,12 @@ impl VRamBuffer {
 
         let mut buffer_guard = self
             .buffer
-            .lock()
+            .write()
             .map_err(|_| anyhow::anyhow!("Failed to lock buffer mutex for write"))?;
 
         unsafe {
             self.queue
-                .enqueue_write_buffer(&mut *buffer_guard, types::CL_FALSE, offset, data, &[])
+                .enqueue_write_buffer(&mut *buffer_guard, types::CL_TRUE, offset, data, &[])
                 .context("Failed to enqueue non-blocking write to buffer")?
                 .wait()
                 .context("Failed waiting for non-blocking write event")?;

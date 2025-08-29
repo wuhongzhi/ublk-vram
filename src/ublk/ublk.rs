@@ -1,24 +1,25 @@
 use crate::opencl::VRamBuffer;
 use anyhow::Result;
 use libublk::{ctrl::UblkCtrlBuilder, io::UblkDev, io::UblkQueue};
-use std::sync::Arc;
+use std::{sync::Arc, rc::Rc};
 
-fn handle_io_cmd(q: &UblkQueue<'_>, tag: u16, vram: Arc<VRamBuffer>, buf: *mut u8) -> i32 {
+fn handle_io_cmd(q: &UblkQueue<'_>, tag: u16, vram: &Arc<VRamBuffer>, buf: *mut u8) -> i32 {
     let iod = q.get_iod(tag);
-    let offset = vram.size().min((iod.start_sector << 9) as usize);
-    let mut bytes = (iod.nr_sectors << 9) as usize;
-    if offset + bytes >= vram.size() {
-        bytes = vram.size() - offset;
+    let limit = vram.size() as usize;
+    let offset = limit.min((iod.start_sector << 9) as usize);
+    let mut length = (iod.nr_sectors << 9) as usize;
+    if offset + length >= limit {
+        length = limit - offset;
     }
-    if bytes > 0 {
+    if length > 0 {
         let op = iod.op_flags & 0xff;
         match op {
             libublk::sys::UBLK_IO_OP_READ => unsafe {
-                let mut array = std::slice::from_raw_parts_mut(buf, bytes);
+                let mut array = std::slice::from_raw_parts_mut(buf, length);
                 let _ = vram.read(offset, &mut array);
             },
             libublk::sys::UBLK_IO_OP_WRITE => unsafe {
-                let array = std::slice::from_raw_parts(buf, bytes);
+                let array = std::slice::from_raw_parts(buf, length);
                 let _ = vram.write(offset, &array);
             },
             libublk::sys::UBLK_IO_OP_FLUSH => {}
@@ -27,7 +28,7 @@ fn handle_io_cmd(q: &UblkQueue<'_>, tag: u16, vram: Arc<VRamBuffer>, buf: *mut u
             }
         }
     }
-    bytes as i32
+    length as i32
 }
 
 // implement whole ublk IO level protocol
@@ -50,13 +51,13 @@ async fn io_task(q: &UblkQueue<'_>, tag: u16, vram: Arc<VRamBuffer>) {
         }
 
         // Handle this incoming IO command
-        res = handle_io_cmd(&q, tag, vram.clone(), buf.as_mut_ptr());
+        res = handle_io_cmd(&q, tag, &vram, buf.as_mut_ptr());
         cmd_op = libublk::sys::UBLK_U_IO_COMMIT_AND_FETCH_REQ;
     }
 }
 
 fn q_fn(qid: u16, dev: &UblkDev, vram: Arc<VRamBuffer>) {
-    let q_rc = std::rc::Rc::new(UblkQueue::new(qid as u16, &dev).unwrap());
+    let q_rc = Rc::new(UblkQueue::new(qid as u16, &dev).unwrap());
     let exe = smol::LocalExecutor::new();
     let mut f_vec = Vec::new();
 
@@ -70,7 +71,7 @@ fn q_fn(qid: u16, dev: &UblkDev, vram: Arc<VRamBuffer>) {
     libublk::uring_async::ublk_wait_and_handle_ios(&exe, &q_rc);
     smol::block_on(async { futures::future::join_all(f_vec).await });
 }
-pub fn start_ublk_server(vram: Arc<VRamBuffer>) -> Result<(), Box<dyn std::error::Error>> {
+pub fn start_ublk_server(vram: VRamBuffer) -> Result<(), Box<dyn std::error::Error>> {
     // Create ublk device
     let workers = num_cpus::get().max(2) as u16;
     let ctrl = Arc::new(
@@ -89,8 +90,8 @@ pub fn start_ublk_server(vram: Arc<VRamBuffer>) -> Result<(), Box<dyn std::error
     });
 
     // Now start this ublk target
-    let use_vram = vram.clone();
     let dev_size = vram.size() as u64;
+    let use_vram = Arc::new(vram);
     ctrl.run_target(
         // target initialization
         |dev| {
