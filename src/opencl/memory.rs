@@ -142,9 +142,9 @@ impl VRamBuffer {
         unsafe {
             self.queue
                 .enqueue_read_buffer(&*buffer_guard, types::CL_TRUE, offset, data, &[])
-                .context("Failed to enqueue non-blocking read from buffer")?
+                .context("Failed to enqueue blocking read from buffer")?
                 .wait()
-                .context("Failed waiting for non-blocking read event")?;
+                .context("Failed waiting for blocking read event")?;
         }
 
         Ok(())
@@ -164,9 +164,9 @@ impl VRamBuffer {
         unsafe {
             self.queue
                 .enqueue_write_buffer(&mut *buffer_guard, types::CL_TRUE, offset, data, &[])
-                .context("Failed to enqueue non-blocking write to buffer")?
+                .context("Failed to enqueue blocking write to buffer")?
                 .wait()
-                .context("Failed waiting for non-blocking write event")?;
+                .context("Failed waiting for blocking write event")?;
         }
 
         Ok(())
