@@ -1,6 +1,6 @@
-//! OpenCL module for GPU memory allocation and management
+//! OpenCL module for OCL memory allocation and management
 //!
-//! This module handles interaction with the GPU via OpenCL,
+//! This module handles interaction with the OCL via OpenCL,
 //! including device selection, memory allocation, and data transfer.
 
 mod memory;

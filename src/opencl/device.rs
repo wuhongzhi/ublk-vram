@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use opencl3::{
-    device::{CL_DEVICE_TYPE_GPU, Device, get_device_ids},
+    device::{self as cl_device, Device, get_device_ids},
     platform::get_platforms,
 };
 
@@ -19,10 +19,13 @@ pub fn list_opencl_devices() -> Result<()> {
             .unwrap_or_else(|_| "Unknown Platform".to_string());
         println!("\nPlatform {}: {}", plat_idx, plat_name);
 
-        match get_device_ids(platform.id(), CL_DEVICE_TYPE_GPU) {
+        match get_device_ids(
+            platform.id(),
+            cl_device::CL_DEVICE_TYPE_GPU | cl_device::CL_DEVICE_TYPE_ACCELERATOR,
+        ) {
             Ok(device_ids) => {
                 if device_ids.is_empty() {
-                    println!("  No GPU devices found on this platform.");
+                    println!("  No OCL devices found on this platform.");
                 } else {
                     for (dev_idx, device_id) in device_ids.iter().enumerate() {
                         let device = Device::new(*device_id);

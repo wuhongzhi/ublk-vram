@@ -1,7 +1,7 @@
 use crate::opencl::VRamBuffer;
 use anyhow::Result;
 use libublk::{ctrl::UblkCtrlBuilder, io::UblkDev, io::UblkQueue};
-use std::{sync::Arc, rc::Rc};
+use std::{rc::Rc, sync::Arc};
 
 fn handle_io_cmd(q: &UblkQueue<'_>, tag: u16, vram: &Arc<VRamBuffer>, buf: *mut u8) -> i32 {
     let iod = q.get_iod(tag);
@@ -16,11 +16,17 @@ fn handle_io_cmd(q: &UblkQueue<'_>, tag: u16, vram: &Arc<VRamBuffer>, buf: *mut 
         match op {
             libublk::sys::UBLK_IO_OP_READ => unsafe {
                 let mut array = std::slice::from_raw_parts_mut(buf, length);
-                let _ = vram.read(offset, &mut array);
+                if let Err(e) = vram.read(offset, &mut array, vram.use_mmap()) {
+                    log::error!("Read error, offset {} size {}, code {}", offset, length, e);
+                    return -libc::EIO;
+                }
             },
             libublk::sys::UBLK_IO_OP_WRITE => unsafe {
                 let array = std::slice::from_raw_parts(buf, length);
-                let _ = vram.write(offset, &array);
+                if let Err(e) = vram.write(offset, &array, vram.use_mmap()) {
+                    log::error!("Write error, offset {} size {}, code {}", offset, length, e);
+                    return -libc::EIO;
+                }
             },
             libublk::sys::UBLK_IO_OP_FLUSH => {}
             _ => {

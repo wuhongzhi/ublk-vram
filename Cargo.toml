@@ -3,9 +3,9 @@ name = "ublk-vram"
 version = "0.1.0"
 edition = "2024"
 authors = ["Jacky WU <hongzhi.wu@139.com>"]
-description = "A block device that exposes GPU memory to userspace via ublk."
+description = "A block device that exposes OCL memory to userspace via ublk."
 license = "MIT"
-keywords = ["opencl", "gpu", "block-device", "swap"]
+keywords = ["opencl", "ocl", "block-device", "swap"]
 categories = ["command-line-utilities"]
 
 [[bin]]

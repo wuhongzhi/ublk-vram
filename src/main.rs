@@ -14,7 +14,7 @@ use nix::sys::mman::{MlockAllFlags, mlockall};
 #[derive(Parser, Debug)]
 #[clap(
     name = "ublk-vram",
-    about = "Expose GPU memory as a block device using a UBLK. Locks memory using mlockall.",
+    about = "Expose OCL memory as a block device using a UBLK. Locks memory using mlockall.",
     version
 )]
 struct Args {
@@ -22,7 +22,7 @@ struct Args {
     #[clap(short, long, value_parser = parse_size_string, default_value = "2048M")]
     size: u64, // Store size in bytes
 
-    /// GPU device index to use (0 for first GPU)
+    /// OCL device index to use (0 for first OCL)
     #[clap(short, long, default_value = "0")]
     device: usize,
 
@@ -33,6 +33,10 @@ struct Args {
     /// Enable verbose logging
     #[clap(short, long)]
     verbose: bool,
+
+    /// Read/Write via memory mapping
+    #[clap(short, long)]
+    mmap: bool,
 
     /// List available OpenCL platforms and devices and exit
     #[clap(long)]
@@ -82,7 +86,7 @@ fn main() -> Result<()> {
     }
     // Size is already parsed into bytes
     log::info!(
-        "Allocating {} bytes ({} MB) on GPU device {} (Platform {})",
+        "Allocating {} bytes ({} MB) on OCL device {} (Platform {})",
         args.size,
         args.size / (1024 * 1024), // Log MB for readability
         args.device,
@@ -93,9 +97,10 @@ fn main() -> Result<()> {
         size: args.size as usize, // VRamBufferConfig expects usize
         device_index: args.device,
         platform_index: args.platform,
+        mmap: args.mmap
     };
     let vram =
-        VRamBuffer::new(&vram_config).context("Failed to allocate GPU memory")?;
+        VRamBuffer::new(&vram_config).context("Failed to allocate OCL memory")?;
 
     log::info!(
         "Successfully allocated {} bytes ({} MB) on {}",
