@@ -46,9 +46,10 @@ pub struct VRamBuffer {
     queue: CommandQueue,
     // Use RwLock instead of RefCell
     buffer: RwLock<Buffer<u8>>,
-    size: usize,
     device: Device,
+    size: usize,
     mmap: bool,
+    offset: u64,
 }
 
 impl VRamBuffer {
@@ -101,7 +102,7 @@ impl VRamBuffer {
             .context("Failed to create command queue")?
         };
 
-        let buffer = unsafe {
+        let mut buffer = unsafe {
             Buffer::<u8>::create(
                 &context,
                 cl_memory::CL_MEM_READ_WRITE,
@@ -119,12 +120,19 @@ impl VRamBuffer {
                 .unwrap_or_else(|_| "Unknown device".to_string())
         );
 
+        unsafe {
+            queue
+                .enqueue_fill_buffer(&mut buffer, &[0u8], 0, config.size, &[])
+                .context("Failed to reset OCL memory")?;
+        }
+
         Ok(Self {
             queue,
+            device,
             buffer: RwLock::new(buffer),
             size: config.size,
-            device,
             mmap: config.mmap,
+            offset: 0,
         })
     }
 
@@ -133,24 +141,43 @@ impl VRamBuffer {
         self.size
     }
 
-    /// get mmap config
-    pub fn use_mmap(&self) -> bool {
-        self.mmap
+    /// update the global offset
+    pub fn offset(&mut self, offset: u64) {
+        self.offset = offset;
+    }
+
+    // check offset in this vram
+    #[inline]
+    fn within(&self, offset: u64) -> bool {
+        offset >= self.offset && offset < self.offset + self.size as u64
+    }
+
+    // the reamaining after current position
+    pub fn remaining(&self, offset: u64) -> Option<usize> {
+        if self.within(offset) {
+            Some((self.size as u64 + self.offset - offset) as usize)
+        } else {
+            None
+        }
     }
 
     /// Read data from the OCL buffer
-    pub fn read(&self, offset: usize, data: &mut [u8], use_mmap: bool) -> Result<()> {
+    pub fn read(&self, offset: u64, data: &mut [u8]) -> Result<()> {
+        if !self.within(offset) {
+            bail!("Attempted to read out of buffer");
+        }
+        let local_offset = (offset - self.offset) as usize;
         let length = data.len();
-        if offset + length > self.size {
+        if local_offset + length > self.size {
             bail!("Attempted to read past end of buffer");
         }
-        unsafe {
-            if use_mmap {
-                let buffer_guard = self
-                    .buffer
-                    .write()
-                    .map_err(|_| anyhow::anyhow!("Failed to lock buffer RwLock for read"))?;
+        if self.mmap {
+            let buffer_guard = self
+                .buffer
+                .write()
+                .map_err(|_| anyhow::anyhow!("Failed to lock buffer RwLock for read"))?;
 
+            unsafe {
                 let mut host_ptr = ptr::null_mut();
                 let _ = self
                     .queue
@@ -158,7 +185,7 @@ impl VRamBuffer {
                         &*buffer_guard,
                         types::CL_TRUE,
                         cl_memory::CL_MEM_READ_ONLY,
-                        offset,
+                        local_offset,
                         length,
                         &mut host_ptr,
                         &[],
@@ -173,14 +200,16 @@ impl VRamBuffer {
                     .enqueue_unmap_mem_object(buffer_guard.get(), host_ptr, &[])
                     .context("Failed to unmmap from buffer")?
                     .wait();
-            } else {
-                let buffer_guard = self
-                    .buffer
-                    .read()
-                    .map_err(|_| anyhow::anyhow!("Failed to lock buffer RwLock for read"))?;
+            }
+        } else {
+            let buffer_guard = self
+                .buffer
+                .read()
+                .map_err(|_| anyhow::anyhow!("Failed to lock buffer RwLock for read"))?;
 
+            unsafe {
                 self.queue
-                    .enqueue_read_buffer(&*buffer_guard, types::CL_TRUE, offset, data, &[])
+                    .enqueue_read_buffer(&*buffer_guard, types::CL_TRUE, local_offset, data, &[])
                     .context("Failed to enqueue blocking read from buffer")?
                     .wait()
                     .context("Failed waiting for blocking read event")?;
@@ -191,9 +220,13 @@ impl VRamBuffer {
     }
 
     /// Write data to the OCL buffer
-    pub fn write(&self, offset: usize, data: &[u8], use_mmap: bool) -> Result<()> {
+    pub fn write(&self, offset: u64, data: &[u8]) -> Result<()> {
+        if !self.within(offset) {
+            bail!("Attempted to write out of buffer");
+        }
+        let local_offset = (offset - self.offset) as usize;
         let length = data.len();
-        if offset + length > self.size {
+        if local_offset + length > self.size {
             bail!("Attempted to write past end of buffer");
         }
 
@@ -203,7 +236,7 @@ impl VRamBuffer {
             .map_err(|_| anyhow::anyhow!("Failed to lock buffer RwLock for write"))?;
 
         unsafe {
-            if use_mmap {
+            if self.mmap {
                 let mut host_ptr = ptr::null_mut();
                 let _ = self
                     .queue
@@ -211,7 +244,7 @@ impl VRamBuffer {
                         &*buffer_guard,
                         types::CL_TRUE,
                         cl_memory::CL_MEM_WRITE_ONLY,
-                        offset,
+                        local_offset,
                         length,
                         &mut host_ptr,
                         &[],
@@ -228,7 +261,13 @@ impl VRamBuffer {
                     .wait();
             } else {
                 self.queue
-                    .enqueue_write_buffer(&mut *buffer_guard, types::CL_TRUE, offset, data, &[])
+                    .enqueue_write_buffer(
+                        &mut *buffer_guard,
+                        types::CL_TRUE,
+                        local_offset,
+                        data,
+                        &[],
+                    )
                     .context("Failed to enqueue blocking write to buffer")?
                     .wait()
                     .context("Failed waiting for blocking write event")?;

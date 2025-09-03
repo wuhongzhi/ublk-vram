@@ -1,44 +1,109 @@
 use crate::opencl::VRamBuffer;
 use anyhow::Result;
-use libublk::{ctrl::UblkCtrlBuilder, io::UblkDev, io::UblkQueue};
+use libublk::{
+    ctrl::UblkCtrlBuilder,
+    helpers::IoBuf,
+    io::{UblkDev, UblkQueue},
+};
+use serde_json::json;
 use std::{rc::Rc, sync::Arc};
 
-fn handle_io_cmd(q: &UblkQueue<'_>, tag: u16, vram: &Arc<VRamBuffer>, buf: *mut u8) -> i32 {
+fn handle_io_cmd(
+    q: &UblkQueue<'_>,
+    tag: u16,
+    buf: &IoBuf<u8>,
+    vrams: &Arc<Vec<VRamBuffer>>
+) -> i32 {
     let iod = q.get_iod(tag);
-    let limit = vram.size() as usize;
-    let offset = limit.min((iod.start_sector << 9) as usize);
-    let mut length = (iod.nr_sectors << 9) as usize;
-    if offset + length >= limit {
-        length = limit - offset;
+    let global_limit = q.dev.tgt.dev_size;
+    // compute global position/size
+    let mut global_offset = global_limit.min(iod.start_sector << 9);
+    let mut global_length = (iod.nr_sectors << 9) as usize;
+    if global_offset + global_length as u64 >= global_limit {
+        global_length = (global_limit - global_offset) as usize;
     }
-    if length > 0 {
+    if global_length > 0 {
         let op = iod.op_flags & 0xff;
         match op {
-            libublk::sys::UBLK_IO_OP_READ => unsafe {
-                let mut array = std::slice::from_raw_parts_mut(buf, length);
-                if let Err(e) = vram.read(offset, &mut array, vram.use_mmap()) {
-                    log::error!("Read error, offset {} size {}, code {}", offset, length, e);
+            libublk::sys::UBLK_IO_OP_READ | libublk::sys::UBLK_IO_OP_WRITE => {
+                let operate = match op {
+                    libublk::sys::UBLK_IO_OP_READ => "Read",
+                    _ => "Write",
+                };
+                let mut local_offset = 0;
+                let mut global_remaining = global_length;
+                for (i, vram) in vrams.iter().enumerate() {
+                    let local_remaining = vram.remaining(global_offset);
+                    if local_remaining.is_none() {
+                        continue;
+                    }
+                    // compute local length to read/write
+                    let local_length = global_remaining.min(local_remaining.unwrap());
+
+                    if libublk::sys::UBLK_IO_OP_READ == op {
+                        let array = unsafe {
+                            std::slice::from_raw_parts_mut(
+                                buf.as_mut_ptr().add(local_offset),
+                                local_length,
+                            )
+                        };
+                        if let Err(e) = vram.read(global_offset, array) {
+                            log::error!(
+                                "{} error, device vram-{} offset {} size {}, code {}",
+                                operate,
+                                i,
+                                global_offset,
+                                local_length,
+                                e
+                            );
+                            return -libc::EIO;
+                        }
+                    } else {
+                        let array = unsafe {
+                            std::slice::from_raw_parts(buf.as_ptr().add(local_offset), local_length)
+                        };
+                        if let Err(e) = vram.write(global_offset, array) {
+                            log::error!(
+                                "{} error, device vram-{} offset {} size {}, code {}",
+                                operate,
+                                i,
+                                global_offset,
+                                local_length,
+                                e
+                            );
+                            return -libc::EIO;
+                        }
+                    }
+
+                    // re-compute rest to read/write
+                    global_remaining -= local_length;
+                    if global_remaining == 0 {
+                        break;
+                    }
+                    local_offset += local_length;
+                    global_offset += local_length as u64;
+                }
+                if global_remaining > 0 {
+                    log::error!(
+                        "{} error, offset {} size {}",
+                        operate,
+                        global_offset,
+                        global_remaining
+                    );
                     return -libc::EIO;
                 }
-            },
-            libublk::sys::UBLK_IO_OP_WRITE => unsafe {
-                let array = std::slice::from_raw_parts(buf, length);
-                if let Err(e) = vram.write(offset, &array, vram.use_mmap()) {
-                    log::error!("Write error, offset {} size {}, code {}", offset, length, e);
-                    return -libc::EIO;
-                }
-            },
+            }
             libublk::sys::UBLK_IO_OP_FLUSH => {}
             _ => {
                 return -libc::EINVAL;
             }
         }
     }
-    length as i32
+    global_length as i32
 }
 
 // implement whole ublk IO level protocol
-async fn io_task(q: &UblkQueue<'_>, tag: u16, vram: Arc<VRamBuffer>) {
+async fn io_task(q: &UblkQueue<'_>, tag: u16, vrams: Arc<Vec<VRamBuffer>>) {
     // IO buffer for exchange data with /dev/ublkbN
     let buf_bytes = q.dev.dev_info.max_io_buf_bytes as usize;
     let buf = libublk::helpers::IoBuf::<u8>::new(buf_bytes);
@@ -57,19 +122,19 @@ async fn io_task(q: &UblkQueue<'_>, tag: u16, vram: Arc<VRamBuffer>) {
         }
 
         // Handle this incoming IO command
-        res = handle_io_cmd(&q, tag, &vram, buf.as_mut_ptr());
+        res = handle_io_cmd(q, tag, &buf, &vrams);
         cmd_op = libublk::sys::UBLK_U_IO_COMMIT_AND_FETCH_REQ;
     }
 }
 
-fn q_fn(qid: u16, dev: &UblkDev, vram: Arc<VRamBuffer>) {
-    let q_rc = Rc::new(UblkQueue::new(qid as u16, &dev).unwrap());
+fn q_fn(qid: u16, dev: &UblkDev, vrams: Arc<Vec<VRamBuffer>>) {
+    let q_rc = Rc::new(UblkQueue::new(qid, dev).unwrap());
     let exe = smol::LocalExecutor::new();
     let mut f_vec = Vec::new();
 
     for tag in 0..dev.dev_info.queue_depth {
         let q = q_rc.clone();
-        let use_vram = vram.clone();
+        let use_vram = vrams.clone();
         f_vec.push(exe.spawn(async move { io_task(&q, tag, use_vram).await }));
     }
 
@@ -77,7 +142,7 @@ fn q_fn(qid: u16, dev: &UblkDev, vram: Arc<VRamBuffer>) {
     libublk::uring_async::ublk_wait_and_handle_ios(&exe, &q_rc);
     smol::block_on(async { futures::future::join_all(f_vec).await });
 }
-pub fn start_ublk_server(vram: VRamBuffer) -> Result<(), Box<dyn std::error::Error>> {
+pub fn start_ublk_server(mut vrams: Vec<VRamBuffer>) -> Result<(), Box<dyn std::error::Error>> {
     // Create ublk device
     let workers = num_cpus::get().max(2) as u16;
     let ctrl = Arc::new(
@@ -95,13 +160,22 @@ pub fn start_ublk_server(vram: VRamBuffer) -> Result<(), Box<dyn std::error::Err
         ctrl_sig.kill_dev().unwrap();
     });
 
+    // compute vram sets
+    let mut dev_size: u64 = 0;
+    for v in vrams.iter_mut() {
+        v.offset(dev_size);
+        dev_size += v.size() as u64;
+    }
+    let dev_blocks = vrams.len();
+    let use_vram = Arc::new(vrams);
     // Now start this ublk target
-    let dev_size = vram.size() as u64;
-    let use_vram = Arc::new(vram);
     ctrl.run_target(
         // target initialization
         |dev| {
             dev.set_default_params(dev_size);
+            dev.set_target_json(json!({
+                "blocks": dev_blocks,
+            }));
             Ok(())
         },
         // queue IO logic

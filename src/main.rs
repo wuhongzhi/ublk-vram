@@ -1,14 +1,11 @@
-mod opencl;
-mod ublk;
-
-use crate::{
-    opencl::{VRamBuffer, VRamBufferConfig, list_opencl_devices},
-    ublk::start_ublk_server,
-};
 use anyhow::{Context, Result, bail};
 use clap::Parser;
 use env_logger::{Builder, Env};
 use nix::sys::mman::{MlockAllFlags, mlockall};
+use ublk_vram::{
+    opencl::{VRamBuffer, VRamBufferConfig, list_opencl_devices},
+    start_ublk_server,
+};
 
 /// Command line arguments for the VRAM Block Device
 #[derive(Parser, Debug)]
@@ -41,6 +38,10 @@ struct Args {
     /// List available OpenCL platforms and devices and exit
     #[clap(long)]
     list_devices: bool,
+
+    /// How many block buffers
+    #[clap(long, default_value = "1")]
+    blocks: usize,
 }
 
 /// Parses a size string (e.g., "512M", "2G") into bytes.
@@ -48,7 +49,7 @@ pub(crate) fn parse_size_string(size_str: &str) -> Result<u64> {
     let size_str = size_str.trim().to_uppercase();
     let (num_part, suffix) = size_str.split_at(
         size_str
-            .find(|c: char| !c.is_digit(10))
+            .find(|c: char| !c.is_ascii_digit())
             .unwrap_or(size_str.len()),
     );
 
@@ -84,33 +85,37 @@ fn main() -> Result<()> {
             );
         }
     }
-    // Size is already parsed into bytes
-    log::info!(
-        "Allocating {} bytes ({} MB) on OCL device {} (Platform {})",
-        args.size,
-        args.size / (1024 * 1024), // Log MB for readability
-        args.device,
-        args.platform
-    );
 
-    let vram_config = VRamBufferConfig {
+    let config = VRamBufferConfig {
         size: args.size as usize, // VRamBufferConfig expects usize
         device_index: args.device,
         platform_index: args.platform,
-        mmap: args.mmap
+        mmap: args.mmap,
     };
-    let vram =
-        VRamBuffer::new(&vram_config).context("Failed to allocate OCL memory")?;
+
+    // Size is already parsed into bytes
+    log::info!(
+        "Allocating {} bytes ({} MB) on OCL device {} (Platform {})",
+        args.size * args.blocks.max(1) as u64,
+        args.size * args.blocks.max(1) as u64 / (1024 * 1024), // Log MB for readability
+        config.device_index,
+        config.platform_index
+    );
+
+    let mut vrams: Vec<VRamBuffer> = Vec::new();
+    for _ in 0..args.blocks.max(1) {
+        vrams.push(VRamBuffer::new(&config).context("Failed to allocate OCL memory")?);
+    }
 
     log::info!(
         "Successfully allocated {} bytes ({} MB) on {}",
-        args.size,
-        args.size / (1024 * 1024), // Log MB for readability
-        vram.device_name()
+        args.size * args.blocks.max(1) as u64,
+        args.size * args.blocks.max(1) as u64 / (1024 * 1024), // Log MB for readability
+        vrams[0].device_name()
     );
 
     log::info!("Starting VRAM Block Device (UBLK)");
-    let _ = start_ublk_server(vram);
+    let _ = start_ublk_server(vrams);
     log::info!("VRAM Block Device has shut down.");
 
     Ok(())

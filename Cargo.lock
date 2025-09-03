@@ -1137,6 +1137,7 @@ dependencies = [
  "nix 0.26.4",
  "num_cpus",
  "opencl3",
+ "serde_json",
  "smol",
 ]
 
