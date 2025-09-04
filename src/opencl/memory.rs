@@ -97,12 +97,12 @@ impl VRamBuffer {
         if local_offset + length > self.size {
             bail!("Attempted to read past end of buffer");
         }
-        let buffer_guard = self
-            .buffer
-            .read()
-            .map_err(|_| anyhow::anyhow!("Failed to lock buffer RwLock for read"))?;
         unsafe {
             if self.mmap {
+                let buffer_guard = self
+                    .buffer
+                    .write()
+                    .map_err(|_| anyhow::anyhow!("Failed to lock buffer RwLock for read"))?;
                 let mut host_ptr = ptr::null_mut();
                 let _ = self
                     .queue
@@ -125,6 +125,10 @@ impl VRamBuffer {
                     .context("Failed to unmmap from buffer")?
                     .wait();
             } else {
+                let buffer_guard = self
+                    .buffer
+                    .read()
+                    .map_err(|_| anyhow::anyhow!("Failed to lock buffer RwLock for read"))?;
                 self.queue
                     .enqueue_read_buffer(&*buffer_guard, types::CL_TRUE, local_offset, data, &[])
                     .context("Failed to enqueue blocking read from buffer")?;
