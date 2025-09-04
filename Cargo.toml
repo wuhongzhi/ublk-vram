@@ -1,9 +1,10 @@
 [package]
 name = "ublk-vram"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 authors = ["Jacky WU <hongzhi.wu@139.com>"]
 description = "A block device that exposes OCL memory to userspace via ublk."
+repository = "https://github.com/wuhongzhi/ublk-vram"
 license = "MIT"
 keywords = ["opencl", "ocl", "block-device", "swap"]
 categories = ["command-line-utilities"]

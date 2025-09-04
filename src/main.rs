@@ -3,7 +3,7 @@ use clap::Parser;
 use env_logger::{Builder, Env};
 use nix::sys::mman::{MlockAllFlags, mlockall};
 use ublk_vram::{
-    opencl::{VRamBuffer, VRamBufferConfig, list_opencl_devices},
+    opencl::{VRamBuffer, VRamBufferConfig, VramDevice, list_opencl_devices},
     start_ublk_server,
 };
 
@@ -102,16 +102,20 @@ fn main() -> Result<()> {
         config.platform_index
     );
 
+    let device = VramDevice::new(&config).context("Failed to allocate OCL Device")?;
     let mut vrams: Vec<VRamBuffer> = Vec::new();
     for _ in 0..args.blocks.max(1) {
-        vrams.push(VRamBuffer::new(&config).context("Failed to allocate OCL memory")?);
+        vrams.push(
+            VRamBuffer::new(&device, config.size, config.mmap)
+                .context("Failed to allocate OCL memory")?,
+        );
     }
 
     log::info!(
         "Successfully allocated {} bytes ({} MB) on {}",
         args.size * args.blocks.max(1) as u64,
         args.size * args.blocks.max(1) as u64 / (1024 * 1024), // Log MB for readability
-        vrams[0].device_name()
+        device.name()
     );
 
     log::info!("Starting VRAM Block Device (UBLK)");

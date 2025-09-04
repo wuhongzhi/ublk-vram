@@ -7,4 +7,4 @@ mod memory;
 mod device;
 
 pub use memory::{VRamBuffer, VRamBufferConfig};
-pub use device::list_opencl_devices;
+pub use device::{VramDevice, list_opencl_devices};
