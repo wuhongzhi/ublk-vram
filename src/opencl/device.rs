@@ -5,7 +5,7 @@ use anyhow::{Context, Result, bail};
 use opencl3::{
     command_queue::{self as cl_command_queue, CommandQueue},
     context::Context as ClContext,
-    device::{self as cl_device, Device as CLDevice, get_device_ids},
+    device::{Device as CLDevice, get_device_ids},
     memory::Buffer,
     memory::{self as cl_memory},
     platform::get_platforms,
@@ -34,7 +34,7 @@ impl VramDevice {
         let platform = &platforms[config.platform_index];
 
         let device_ids = platform
-            .get_devices(cl_device::CL_DEVICE_TYPE_GPU | cl_device::CL_DEVICE_TYPE_ACCELERATOR)
+            .get_devices(config.device)
             .context("Failed to get device list")?;
 
         if device_ids.is_empty() {
@@ -109,7 +109,7 @@ impl Drop for VramDevice {
     }
 }
 /// Lists available OpenCL devices.
-pub fn list_opencl_devices() -> Result<()> {
+pub fn list_opencl_devices(config: &VRamBufferConfig) -> Result<()> {
     println!("Available OpenCL Platforms and Devices:");
     let platforms = get_platforms().context("Failed to get OpenCL platforms")?;
     if platforms.is_empty() {
@@ -123,10 +123,7 @@ pub fn list_opencl_devices() -> Result<()> {
             .unwrap_or_else(|_| "Unknown Platform".to_string());
         println!("\nPlatform {}: {}", plat_idx, plat_name);
 
-        match get_device_ids(
-            platform.id(),
-            cl_device::CL_DEVICE_TYPE_GPU | cl_device::CL_DEVICE_TYPE_ACCELERATOR,
-        ) {
+        match get_device_ids(platform.id(), config.device) {
             Ok(device_ids) => {
                 if device_ids.is_empty() {
                     println!("  No OCL devices found on this platform.");

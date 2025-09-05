@@ -42,6 +42,10 @@ struct Args {
     /// How many block buffers
     #[clap(long, default_value = "1")]
     blocks: usize,
+
+    /// CPU device
+    #[clap(long)]
+    cpu: bool,
 }
 
 /// Parses a size string (e.g., "512M", "2G") into bytes.
@@ -69,8 +73,20 @@ fn main() -> Result<()> {
     } else {
         Builder::from_env(Env::default().default_filter_or("info")).init();
     }
+    
+    let mut config = VRamBufferConfig {
+        platform_index: args.platform,
+        device_index: args.device,
+        size: args.size as usize,
+        mmap: args.mmap,
+        ..Default::default()
+    };
+    if args.cpu {
+        config.with_cpu();
+    }
+
     if args.list_devices {
-        return list_opencl_devices();
+        return list_opencl_devices(&config);
     }
 
     log::info!("Attempting to lock process memory using mlockall()...");
@@ -85,13 +101,6 @@ fn main() -> Result<()> {
             );
         }
     }
-
-    let config = VRamBufferConfig {
-        size: args.size as usize, // VRamBufferConfig expects usize
-        device_index: args.device,
-        platform_index: args.platform,
-        mmap: args.mmap,
-    };
 
     // Size is already parsed into bytes
     log::info!(

@@ -1,6 +1,6 @@
 [package]
 name = "ublk-vram"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2024"
 authors = ["Jacky WU <hongzhi.wu@139.com>"]
 description = "A block device that exposes OCL memory to userspace via ublk."

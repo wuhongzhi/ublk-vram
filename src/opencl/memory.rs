@@ -8,6 +8,7 @@ use anyhow::{Context, Result, bail};
 use opencl3::{
     command_queue::CommandQueue,
     memory::{self as cl_memory, Buffer, ClMem},
+    device::{self as cl_device},
     types,
 };
 // Use std::sync::RwLock for thread-safe interior mutability
@@ -25,6 +26,14 @@ pub struct VRamBufferConfig {
     pub platform_index: usize,
     /// Read/Write via mmap
     pub mmap: bool,
+    /// Device
+    pub device: u64,
+}
+
+impl VRamBufferConfig {
+    pub fn with_cpu(&mut self) {
+        self.device = cl_device::CL_DEVICE_TYPE_CPU;
+    }
 }
 
 impl Default for VRamBufferConfig {
@@ -34,6 +43,7 @@ impl Default for VRamBufferConfig {
             device_index: 0,
             platform_index: 0,
             mmap: false,
+            device: cl_device::CL_DEVICE_TYPE_GPU | cl_device::CL_DEVICE_TYPE_ACCELERATOR
         }
     }
 }
