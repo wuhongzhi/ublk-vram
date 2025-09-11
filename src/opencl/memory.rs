@@ -127,7 +127,7 @@ impl VRamBuffer {
                     )
                     .context("Failed to mmap from buffer")?;
 
-                data.as_mut_ptr().copy_from(host_ptr as *mut u8, length);
+                data.as_mut_ptr().copy_from_nonoverlapping(host_ptr as *mut u8, length);
 
                 let _ = self
                     .queue
@@ -180,7 +180,7 @@ impl VRamBuffer {
                     )
                     .context("Failed to mmap from buffer")?;
 
-                data.as_ptr().copy_to(host_ptr as *mut u8, length);
+                data.as_ptr().copy_to_nonoverlapping(host_ptr as *mut u8, length);
 
                 let _ = self
                     .queue
