@@ -1,4 +1,4 @@
 pub mod opencl;
-#[path = "ublk/ublk.rs"]
-mod ublk;
-pub use ublk::start_ublk_server;
+#[path = "ublk/server.rs"]
+mod server;
+pub use server::start_ublk_server;

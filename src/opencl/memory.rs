@@ -7,8 +7,8 @@ use super::VramDevice;
 use anyhow::{Context, Result, bail};
 use opencl3::{
     command_queue::CommandQueue,
-    memory::{self as cl_memory, Buffer, ClMem},
     device::{self as cl_device},
+    memory::{self as cl_memory, Buffer, ClMem},
     types,
 };
 // Use std::sync::RwLock for thread-safe interior mutability
@@ -43,7 +43,7 @@ impl Default for VRamBufferConfig {
             device_index: 0,
             platform_index: 0,
             mmap: false,
-            device: cl_device::CL_DEVICE_TYPE_GPU | cl_device::CL_DEVICE_TYPE_ACCELERATOR
+            device: cl_device::CL_DEVICE_TYPE_GPU | cl_device::CL_DEVICE_TYPE_ACCELERATOR,
         }
     }
 }
@@ -127,7 +127,8 @@ impl VRamBuffer {
                     )
                     .context("Failed to mmap from buffer")?;
 
-                data.as_mut_ptr().copy_from_nonoverlapping(host_ptr as *mut u8, length);
+                data.as_mut_ptr()
+                    .copy_from_nonoverlapping(host_ptr as *mut u8, length);
 
                 let _ = self
                     .queue
@@ -180,7 +181,8 @@ impl VRamBuffer {
                     )
                     .context("Failed to mmap from buffer")?;
 
-                data.as_ptr().copy_to_nonoverlapping(host_ptr as *mut u8, length);
+                data.as_ptr()
+                    .copy_to_nonoverlapping(host_ptr as *mut u8, length);
 
                 let _ = self
                     .queue
