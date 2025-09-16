@@ -8,7 +8,12 @@ use libublk::{
 use serde_json::json;
 use std::{rc::Rc, sync::Arc};
 
-fn handle_io_cmd(q: &UblkQueue<'_>, tag: u16, buf: &IoBuf<u8>, vrams: &Vec<VRamBuffer>) -> i32 {
+fn handle_io_cmd(
+    q: &UblkQueue<'_>,
+    tag: u16,
+    buf: &IoBuf<u8>,
+    vrams: &Arc<Vec<VRamBuffer>>,
+) -> i32 {
     let iod = q.get_iod(tag);
     let global_limit = q.dev.tgt.dev_size;
     // compute global position/size
