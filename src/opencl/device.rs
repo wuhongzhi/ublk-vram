@@ -1,23 +1,23 @@
 use std::ptr;
 
-use super::VRamBufferConfig;
+use super::CLBufferConfig;
 use anyhow::{Context, Result, bail};
 use opencl3::{
     command_queue::{self as cl_command_queue, CommandQueue},
-    context::Context as ClContext,
-    device::{Device as CLDevice, get_device_ids},
+    context::Context as clContext,
+    device::{Device as clDevice, get_device_ids},
     memory::Buffer,
     memory::{self as cl_memory},
     platform::get_platforms,
 };
 
-pub struct VramDevice {
-    dev: CLDevice,
-    ctx: ClContext,
+pub struct CLDevice {
+    dev: clDevice,
+    ctx: clContext,
 }
 
-impl VramDevice {
-    pub fn new(config: &VRamBufferConfig) -> Result<Self> {
+impl CLDevice {
+    pub fn new(config: &CLBufferConfig) -> Result<Self> {
         let platforms = get_platforms().context("Failed to get OpenCL platforms")?;
 
         if platforms.is_empty() {
@@ -51,8 +51,8 @@ impl VramDevice {
                 device_ids.len() - 1
             );
         }
-        let device = CLDevice::new(device_ids[config.device_index]);
-        let context = ClContext::from_device(&device).context("Failed to create OpenCL context")?;
+        let device = clDevice::new(device_ids[config.device_index]);
+        let context = clContext::from_device(&device).context("Failed to create OpenCL context")?;
         Ok(Self {
             dev: device,
             ctx: context,
@@ -90,7 +90,7 @@ impl VramDevice {
             )
             .context("Failed to allocate OCL memory")?;
 
-            log::info!(
+            log::debug!(
                 "Created OpenCL buffer of size {} bytes on device: {}",
                 size,
                 self.name()
@@ -103,13 +103,13 @@ impl VramDevice {
         }
     }
 }
-impl Drop for VramDevice {
+impl Drop for CLDevice {
     fn drop(&mut self) {
         log::debug!("Freeing OCL device");
     }
 }
 /// Lists available OpenCL devices.
-pub fn list_opencl_devices(config: &VRamBufferConfig) -> Result<()> {
+pub fn list_opencl_devices(config: &CLBufferConfig) -> Result<()> {
     println!("Available OpenCL Platforms and Devices:");
     let platforms = get_platforms().context("Failed to get OpenCL platforms")?;
     if platforms.is_empty() {
@@ -129,7 +129,7 @@ pub fn list_opencl_devices(config: &VRamBufferConfig) -> Result<()> {
                     println!("  No OCL devices found on this platform.");
                 } else {
                     for (dev_idx, device_id) in device_ids.iter().enumerate() {
-                        let device = CLDevice::new(*device_id);
+                        let device = clDevice::new(*device_id);
                         let dev_name = device
                             .name()
                             .unwrap_or_else(|_| "Unknown Device".to_string());

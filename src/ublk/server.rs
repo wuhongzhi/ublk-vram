@@ -1,113 +1,45 @@
-use crate::opencl::VRamBuffer;
+use crate::{VBuffer, VMemory};
 use anyhow::Result;
 use libublk::{
     ctrl::UblkCtrlBuilder,
     helpers::IoBuf,
     io::{UblkDev, UblkQueue},
+    sys,
 };
 use serde_json::json;
 use std::{rc::Rc, sync::Arc};
 
-fn handle_io_cmd(
+fn handle_io_cmd<T: VBuffer>(
     q: &UblkQueue<'_>,
     tag: u16,
     buf: &IoBuf<u8>,
-    vrams: &Arc<Vec<VRamBuffer>>,
+    vrams: &Arc<VMemory<T>>,
 ) -> i32 {
     let iod = q.get_iod(tag);
-    let global_limit = q.dev.tgt.dev_size;
+    let limit = q.dev.tgt.dev_size;
     // compute global position/size
-    let mut global_offset = global_limit.min(iod.start_sector << 9);
-    let mut global_length = (iod.nr_sectors << 9) as usize;
-    if global_offset + global_length as u64 >= global_limit {
-        global_length = (global_limit - global_offset) as usize;
+    let offset = limit.min(iod.start_sector << 9);
+    let mut length = (iod.nr_sectors << 9) as usize;
+    if offset + length as u64 >= limit {
+        length = (limit - offset) as usize;
     }
-    if global_length > 0 {
-        let op = iod.op_flags & 0xff;
-        match op {
-            libublk::sys::UBLK_IO_OP_READ | libublk::sys::UBLK_IO_OP_WRITE => {
-                let operate = match op {
-                    libublk::sys::UBLK_IO_OP_READ => "Read",
-                    _ => "Write",
-                };
-                let mut local_offset = 0;
-                let mut global_remaining = global_length;
-                for (i, vram) in vrams.iter().enumerate() {
-                    let local_remaining = vram.remaining(global_offset);
-                    if local_remaining.is_none() {
-                        continue;
-                    }
-                    // compute local length to read/write
-                    let local_length = global_remaining.min(local_remaining.unwrap());
-
-                    if libublk::sys::UBLK_IO_OP_READ == op {
-                        let array = unsafe {
-                            std::slice::from_raw_parts_mut(
-                                buf.as_mut_ptr().add(local_offset),
-                                local_length,
-                            )
-                        };
-                        if let Err(e) = vram.read(global_offset, array) {
-                            log::error!(
-                                "{} error, device vram-{} offset {} size {}, code {}",
-                                operate,
-                                i,
-                                global_offset,
-                                local_length,
-                                e
-                            );
-                            return -libc::EIO;
-                        }
-                    } else {
-                        let array = unsafe {
-                            std::slice::from_raw_parts(buf.as_ptr().add(local_offset), local_length)
-                        };
-                        if let Err(e) = vram.write(global_offset, array) {
-                            log::error!(
-                                "{} error, device vram-{} offset {} size {}, code {}",
-                                operate,
-                                i,
-                                global_offset,
-                                local_length,
-                                e
-                            );
-                            return -libc::EIO;
-                        }
-                    }
-
-                    // re-compute rest to read/write
-                    global_remaining -= local_length;
-                    if global_remaining == 0 {
-                        break;
-                    }
-                    local_offset += local_length;
-                    global_offset += local_length as u64;
-                }
-                if global_remaining > 0 {
-                    log::error!(
-                        "{} error, offset {} size {}",
-                        operate,
-                        global_offset,
-                        global_remaining
-                    );
-                    return -libc::EIO;
-                }
-            }
-            libublk::sys::UBLK_IO_OP_FLUSH => {}
-            _ => {
-                return -libc::EINVAL;
-            }
-        }
+    if length == 0 {
+        return length as i32;
     }
-    global_length as i32
+    match iod.op_flags & 0xff {
+        sys::UBLK_IO_OP_READ => vrams.read(offset, length, buf.as_mut_ptr()),
+        sys::UBLK_IO_OP_WRITE => vrams.write(offset, length, buf.as_ptr()),
+        sys::UBLK_IO_OP_FLUSH | sys::UBLK_IO_OP_DISCARD => length as i32,
+        _ => -libc::EINVAL,
+    }
 }
 
 // implement whole ublk IO level protocol
-async fn io_task(q: &UblkQueue<'_>, tag: u16, vrams: Arc<Vec<VRamBuffer>>) {
+async fn io_task<T: VBuffer>(q: &UblkQueue<'_>, tag: u16, vrams: Arc<VMemory<T>>) {
     // IO buffer for exchange data with /dev/ublkbN
     let buf_bytes = q.dev.dev_info.max_io_buf_bytes as usize;
     let buf = libublk::helpers::IoBuf::<u8>::new(buf_bytes);
-    let mut cmd_op = libublk::sys::UBLK_U_IO_FETCH_REQ;
+    let mut cmd_op = sys::UBLK_U_IO_FETCH_REQ;
     let mut res = 0;
 
     // Register IO buffer, so that buffer pages can be discarded
@@ -117,17 +49,17 @@ async fn io_task(q: &UblkQueue<'_>, tag: u16, vrams: Arc<Vec<VRamBuffer>>) {
         // Complete previous command with result and re-submit
         // IO command for fetching new IO request from /dev/ublkbN
         res = q.submit_io_cmd(tag, cmd_op, buf.as_mut_ptr(), res).await;
-        if res == libublk::sys::UBLK_IO_RES_ABORT {
+        if res == sys::UBLK_IO_RES_ABORT {
             break;
         }
 
         // Handle this incoming IO command
         res = handle_io_cmd(q, tag, &buf, &vrams);
-        cmd_op = libublk::sys::UBLK_U_IO_COMMIT_AND_FETCH_REQ;
+        cmd_op = sys::UBLK_U_IO_COMMIT_AND_FETCH_REQ;
     }
 }
 
-fn q_fn(qid: u16, dev: &UblkDev, vrams: Arc<Vec<VRamBuffer>>) {
+fn q_fn<T: VBuffer>(qid: u16, dev: &UblkDev, vrams: Arc<VMemory<T>>) {
     let q_rc = Rc::new(UblkQueue::new(qid, dev).unwrap());
     let exe = smol::LocalExecutor::new();
     let mut f_vec = Vec::new();
@@ -142,7 +74,10 @@ fn q_fn(qid: u16, dev: &UblkDev, vrams: Arc<Vec<VRamBuffer>>) {
     libublk::uring_async::ublk_wait_and_handle_ios(&exe, &q_rc);
     smol::block_on(async { futures::future::join_all(f_vec).await });
 }
-pub fn start_ublk_server(mut vrams: Vec<VRamBuffer>) -> Result<(), Box<dyn std::error::Error>> {
+pub fn start_ublk_server<T>(vrams: VMemory<T>) -> Result<(), Box<dyn std::error::Error>>
+where
+    T: VBuffer + 'static,
+{
     // Create ublk device
     let workers = num_cpus::get().max(2) as u16;
     let ctrl = Arc::new(
@@ -161,27 +96,32 @@ pub fn start_ublk_server(mut vrams: Vec<VRamBuffer>) -> Result<(), Box<dyn std::
     });
 
     // compute vram sets
-    let mut dev_size: u64 = 0;
-    for v in vrams.iter_mut() {
-        v.offset(dev_size);
-        dev_size += v.size() as u64;
-    }
-    let dev_blocks = vrams.len();
+    let dev_size: u64 = vrams.size();
+    let dev_blocks = vrams.blocks();
     let use_vram = Arc::new(vrams);
     // Now start this ublk target
     ctrl.run_target(
         // target initialization
         |dev| {
             dev.set_default_params(dev_size);
+            let params = &mut dev.tgt.params;
+            params.types |= sys::UBLK_PARAM_TYPE_DISCARD;
+            let discard = &mut params.discard;
+            discard.discard_granularity = 1 << params.basic.physical_bs_shift;
+            discard.max_discard_sectors	= u32::MAX >> 9;
+			discard.max_discard_segments = 1;
             dev.set_target_json(json!({
-                "blocks": dev_blocks,
+                "blocks": dev_blocks
             }));
             Ok(())
         },
         // queue IO logic
         |tag, dev| q_fn(tag, dev, use_vram),
         // dump device after it is started
-        |dev| dev.dump(),
+        |dev| {
+            dev.dump();
+            log::info!("Press CTRL+C to exit.");
+        },
     )?;
 
     // Usually device is deleted automatically when `ctrl` drops, but

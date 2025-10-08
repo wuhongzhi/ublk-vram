@@ -1,23 +1,53 @@
+use std::ops::Div;
+
 use anyhow::{Context, Result, bail};
-use clap::Parser;
+use clap::{Args, Parser, Subcommand};
 use env_logger::{Builder, Env};
 use nix::sys::mman::{MlockAllFlags, mlockall};
 use ublk_vram::{
-    opencl::{VRamBuffer, VRamBufferConfig, VramDevice, list_opencl_devices},
+    VMemory,
+    local::LOBuffer,
+    opencl::{CLBuffer, CLBufferConfig, CLDevice, list_opencl_devices},
     start_ublk_server,
 };
 
 /// Command line arguments for the VRAM Block Device
-#[derive(Parser, Debug)]
+#[derive(Parser)]
 #[clap(
     name = "ublk-vram",
     about = "Expose OCL memory as a block device using a UBLK. Locks memory using mlockall.",
     version
 )]
-struct Args {
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+
+    /// Enable verbose logging
+    #[clap(short, long)]
+    verbose: bool,
+
     /// Size of the block device (e.g., 512M, 2G, 1024). Defaults to MB if no suffix.
     #[clap(short, long, value_parser = parse_size_string, default_value = "2048M")]
     size: u64, // Store size in bytes
+
+    /// How many blocks, max 100
+    #[clap(short, long, default_value = "1")]
+    blocks: usize,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// OCL devices
+    Ocl(CliOCL),
+    /// VMM devices
+    Vmm,
+}
+
+#[derive(Args)]
+struct CliOCL {
+    /// List available OpenCL platforms and devices and exit
+    #[clap(long)]
+    list_devices: bool,
 
     /// OCL device index to use (0 for first OCL)
     #[clap(short, long, default_value = "0")]
@@ -27,21 +57,9 @@ struct Args {
     #[clap(short, long, default_value = "0")]
     platform: usize,
 
-    /// Enable verbose logging
-    #[clap(short, long)]
-    verbose: bool,
-
     /// Read/Write via memory mapping
     #[clap(short, long)]
     mmap: bool,
-
-    /// List available OpenCL platforms and devices and exit
-    #[clap(long)]
-    list_devices: bool,
-
-    /// How many block buffers
-    #[clap(long, default_value = "1")]
-    blocks: usize,
 
     /// CPU device
     #[clap(long)]
@@ -67,30 +85,14 @@ pub(crate) fn parse_size_string(size_str: &str) -> Result<u64> {
 }
 
 fn main() -> Result<()> {
-    let args = Args::parse();
-    if args.verbose {
+    let cli: Cli = Cli::parse();
+    if cli.verbose {
         Builder::from_env(Env::default().default_filter_or("debug")).init();
     } else {
         Builder::from_env(Env::default().default_filter_or("info")).init();
     }
-    
-    let mut config = VRamBufferConfig {
-        platform_index: args.platform,
-        device_index: args.device,
-        size: args.size as usize,
-        mmap: args.mmap,
-        ..Default::default()
-    };
-    if args.cpu {
-        config.with_cpu();
-    }
-
-    if args.list_devices {
-        return list_opencl_devices(&config);
-    }
 
     log::info!("Attempting to lock process memory using mlockall()...");
-
     // Use correct flag names from the MlockAllFlags type
     match mlockall(MlockAllFlags::MCL_CURRENT | MlockAllFlags::MCL_FUTURE) {
         Ok(_) => log::info!("Successfully locked process memory."),
@@ -102,34 +104,85 @@ fn main() -> Result<()> {
         }
     }
 
+    let _ = match cli.command {
+        Commands::Vmm => start1(cli.size, cli.blocks.max(1).min(100)),
+        Commands::Ocl(ocl) => {
+            let mut config: CLBufferConfig = CLBufferConfig {
+                platform_index: ocl.platform,
+                device_index: ocl.device,
+                size: cli.size as usize,
+                mmap: ocl.mmap,
+                ..Default::default()
+            };
+            if ocl.cpu {
+                config.with_cpu();
+            }
+
+            if ocl.list_devices {
+                return list_opencl_devices(&config);
+            }
+            start2(cli.size, cli.blocks.max(1).min(100), config)
+        }
+    };
+
+    log::info!("VRAM Block Device has shut down.");
+    Ok(())
+}
+
+fn start1(size: u64, blocks: usize) -> Result<(), Box<dyn std::error::Error>> {
+    // Size is already parsed into bytes
+    log::info!(
+        "Allocating {} bytes ({} MB)",
+        size,
+        size / (1024 * 1024), // Log MB for readability
+    );
+
+    let mut vrams: Vec<LOBuffer> = Vec::new();
+    for _ in 0..blocks {
+        vrams.push(
+            LOBuffer::new(size.div(blocks as u64) as usize).context("Failed to allocate memory")?,
+        );
+    }
+    log::info!(
+        "Successfully allocated {} bytes ({} MB)",
+        size,
+        size / (1024 * 1024), // Log MB for readability
+    );
+
+    log::info!("Starting VRAM Block Device (UBLK)");
+    start_ublk_server(VMemory::new(vrams))
+}
+
+fn start2(
+    size: u64,
+    blocks: usize,
+    config: CLBufferConfig,
+) -> Result<(), Box<dyn std::error::Error>> {
     // Size is already parsed into bytes
     log::info!(
         "Allocating {} bytes ({} MB) on OCL device {} (Platform {})",
-        args.size * args.blocks.max(1) as u64,
-        args.size * args.blocks.max(1) as u64 / (1024 * 1024), // Log MB for readability
+        size,
+        size / (1024 * 1024), // Log MB for readability
         config.device_index,
         config.platform_index
     );
 
-    let device = VramDevice::new(&config).context("Failed to allocate OCL Device")?;
-    let mut vrams: Vec<VRamBuffer> = Vec::new();
-    for _ in 0..args.blocks.max(1) {
+    let device = CLDevice::new(&config).context("Failed to allocate OCL Device")?;
+    let mut vrams: Vec<CLBuffer> = Vec::new();
+    for _ in 0..blocks {
         vrams.push(
-            VRamBuffer::new(&device, config.size, config.mmap)
+            CLBuffer::new(&device, size.div(blocks as u64) as usize, config.mmap)
                 .context("Failed to allocate OCL memory")?,
         );
     }
 
     log::info!(
         "Successfully allocated {} bytes ({} MB) on {}",
-        args.size * args.blocks.max(1) as u64,
-        args.size * args.blocks.max(1) as u64 / (1024 * 1024), // Log MB for readability
+        size,
+        size / (1024 * 1024), // Log MB for readability
         device.name()
     );
 
     log::info!("Starting VRAM Block Device (UBLK)");
-    let _ = start_ublk_server(vrams);
-    log::info!("VRAM Block Device has shut down.");
-
-    Ok(())
+    start_ublk_server(VMemory::new(vrams))
 }

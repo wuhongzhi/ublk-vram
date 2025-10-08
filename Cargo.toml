@@ -12,7 +12,7 @@
 [package]
 edition = "2024"
 name = "ublk-vram"
-version = "0.1.6"
+version = "0.1.13"
 authors = ["Jacky WU <hongzhi.wu@139.com>"]
 build = false
 autolib = false

@@ -3,7 +3,9 @@
 //! This module provides functionality to allocate and manage
 //! OCL memory buffers that will be exposed as block devices.
 
-use super::VramDevice;
+use crate::VBuffer;
+
+use super::CLDevice;
 use anyhow::{Context, Result, bail};
 use opencl3::{
     command_queue::CommandQueue,
@@ -11,32 +13,31 @@ use opencl3::{
     memory::{self as cl_memory, Buffer, ClMem},
     types,
 };
-// Use std::sync::RwLock for thread-safe interior mutability
 use std::ptr;
 use std::sync::RwLock;
 
 /// Configuration for a OCL memory buffer
 #[derive(Debug, Clone)]
-pub struct VRamBufferConfig {
+pub struct CLBufferConfig {
     /// Size of the buffer in bytes
     pub size: usize,
+    /// Read/Write via mmap
+    pub mmap: bool,
     /// OCL device index to use (0 for first OCL)
     pub device_index: usize,
     /// Optional platform index (defaults to 0)
     pub platform_index: usize,
-    /// Read/Write via mmap
-    pub mmap: bool,
     /// Device
     pub device: u64,
 }
 
-impl VRamBufferConfig {
+impl CLBufferConfig {
     pub fn with_cpu(&mut self) {
         self.device = cl_device::CL_DEVICE_TYPE_CPU;
     }
 }
 
-impl Default for VRamBufferConfig {
+impl Default for CLBufferConfig {
     fn default() -> Self {
         Self {
             size: 2048 * 1024 * 1024, // 2 GB default size
@@ -49,8 +50,8 @@ impl Default for VRamBufferConfig {
 }
 
 /// A buffer allocated in OCL VRAM via OpenCL
-// Make VRamBuffer Send + Sync by using RwLock for the buffer
-pub struct VRamBuffer {
+// Make CLBuffer Send + Sync by using RwLock for the buffer
+pub struct CLBuffer {
     queue: CommandQueue,
     buffer: RwLock<Buffer<u8>>,
     offset: u64,
@@ -58,9 +59,9 @@ pub struct VRamBuffer {
     mmap: bool,
 }
 
-impl VRamBuffer {
+impl CLBuffer {
     /// Create a new OCL memory buffer with the specified configuration
-    pub fn new(device: &VramDevice, size: usize, mmap: bool) -> Result<Self> {
+    pub fn new(device: &CLDevice, size: usize, mmap: bool) -> Result<Self> {
         let queue = device.create_queue()?;
         let buffer = RwLock::new(device.create_buffer(&queue, size)?);
         Ok(Self {
@@ -72,24 +73,15 @@ impl VRamBuffer {
         })
     }
 
-    /// Get the buffer size in bytes
-    pub fn size(&self) -> usize {
-        self.size
-    }
-
-    /// update the global offset
-    pub fn offset(&mut self, offset: u64) {
-        self.offset = offset;
-    }
-
     // check offset in this vram
     #[inline]
     fn within(&self, offset: u64) -> bool {
         offset >= self.offset && offset < self.offset + self.size as u64
-    }
+    }   
+}
 
-    // the reamaining after current position
-    pub fn remaining(&self, offset: u64) -> Option<usize> {
+impl VBuffer for CLBuffer {
+    fn remaining(&self, offset: u64) -> Option<usize> {
         if self.within(offset) {
             Some((self.size as u64 + self.offset - offset) as usize)
         } else {
@@ -97,8 +89,15 @@ impl VRamBuffer {
         }
     }
 
-    /// Read data from the OCL buffer
-    pub fn read(&self, offset: u64, data: &mut [u8]) -> Result<()> {
+    fn size(&self) -> usize {
+        self.size
+    }
+
+    fn offset(&mut self, offset: u64) {
+        self.offset = offset;
+    }    
+
+    fn read(&self, offset: u64, data: &mut [u8]) -> Result<()> {
         if !self.within(offset) {
             bail!("Attempted to read out of buffer");
         }
@@ -149,8 +148,7 @@ impl VRamBuffer {
         Ok(())
     }
 
-    /// Write data to the OCL buffer
-    pub fn write(&self, offset: u64, data: &[u8]) -> Result<()> {
+    fn write(&self, offset: u64, data: &[u8]) -> Result<()> {
         if !self.within(offset) {
             bail!("Attempted to write out of buffer");
         }
@@ -206,7 +204,7 @@ impl VRamBuffer {
     }
 }
 
-impl Drop for VRamBuffer {
+impl Drop for CLBuffer {
     fn drop(&mut self) {
         log::debug!("Freeing OCL memory buffer");
     }
