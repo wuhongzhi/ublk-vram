@@ -74,7 +74,7 @@ impl VBuffer for LOBuffer {
             buffer_guard
                 .as_ptr()
                 .add(local_offset)
-                .copy_to_nonoverlapping(data.as_mut_ptr(), length as usize);
+                .copy_to_nonoverlapping(data.as_mut_ptr(), length);
         }
         Ok(())
     }
@@ -97,7 +97,7 @@ impl VBuffer for LOBuffer {
             buffer_guard
                 .as_ptr()
                 .add(local_offset)
-                .copy_from_nonoverlapping(data.as_ptr(), length as usize);
+                .copy_from_nonoverlapping(data.as_ptr(), length);
         }
         Ok(())
     }
@@ -105,10 +105,9 @@ impl VBuffer for LOBuffer {
 
 impl Drop for LOBuffer {
     fn drop(&mut self) {
-        let ptr = self.buffer.write().unwrap();
         unsafe {
             let layout = Layout::from_size_align_unchecked(self.size, size_of::<u64>());
-            alloc::dealloc(ptr.as_ptr(), layout);
+            alloc::dealloc(self.buffer.get_mut().unwrap().as_ptr(), layout);
         }
         log::debug!("Freeing memory buffer");
     }

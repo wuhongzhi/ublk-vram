@@ -27,8 +27,8 @@ fn handle_io_cmd<T: VBuffer>(
         return length as i32;
     }
     match iod.op_flags & 0xff {
-        sys::UBLK_IO_OP_READ => vrams.read(offset, length, buf.as_mut_ptr()),
-        sys::UBLK_IO_OP_WRITE => vrams.write(offset, length, buf.as_ptr()),
+        sys::UBLK_IO_OP_READ => unsafe { vrams.read(offset, length, buf.as_mut_ptr()) },
+        sys::UBLK_IO_OP_WRITE => unsafe { vrams.write(offset, length, buf.as_ptr()) },
         sys::UBLK_IO_OP_FLUSH | sys::UBLK_IO_OP_DISCARD => length as i32,
         _ => -libc::EINVAL,
     }
@@ -108,8 +108,8 @@ where
             params.types |= sys::UBLK_PARAM_TYPE_DISCARD;
             let discard = &mut params.discard;
             discard.discard_granularity = 1 << params.basic.physical_bs_shift;
-            discard.max_discard_sectors	= u32::MAX >> 9;
-			discard.max_discard_segments = 1;
+            discard.max_discard_sectors = u32::MAX >> 9;
+            discard.max_discard_segments = 1;
             dev.set_target_json(json!({
                 "blocks": dev_blocks
             }));

@@ -36,7 +36,9 @@ impl<T: VBuffer> VMemory<T> {
         Self { vrams, size }
     }
 
-    pub fn read(&self, offset: u64, length: usize, data: *mut u8) -> i32 {
+    /// # Safety
+    /// data must a validate ptr
+    pub unsafe fn read(&self, offset: u64, length: usize, data: *mut u8) -> i32 {
         let mut local_offset = 0;
         let mut global_offset = offset;
         let mut global_remaining = length;
@@ -48,8 +50,9 @@ impl<T: VBuffer> VMemory<T> {
             // compute local length to read/write
             let local_length = global_remaining.min(local_remaining.unwrap());
 
-            let array =
-                unsafe { std::slice::from_raw_parts_mut(data.add(local_offset), local_length) };
+            let array = unsafe {
+                std::slice::from_raw_parts_mut(data.add(local_offset), local_length)
+            };
             if let Err(e) = vram.read(global_offset, array) {
                 log::error!(
                     "Read error, device vram-{} offset {} size {}, code {}",
@@ -80,7 +83,9 @@ impl<T: VBuffer> VMemory<T> {
         length as i32
     }
 
-    pub fn write(&self, offset: u64, length: usize, data: *const u8) -> i32 {
+    /// # Safety
+    /// data must a validate ptr
+    pub unsafe fn write(&self, offset: u64, length: usize, data: *const u8) -> i32 {
         let mut local_offset = 0;
         let mut global_offset = offset;
         let mut global_remaining = length;
@@ -128,5 +133,11 @@ impl<T: VBuffer> VMemory<T> {
     }
     pub fn blocks(&self) -> usize {
         self.vrams.len()
+    }
+}
+
+impl<T: VBuffer> From<Vec<T>> for VMemory<T> {
+    fn from(vrams: Vec<T>) -> Self {
+        VMemory::new(vrams)
     }
 }

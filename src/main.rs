@@ -5,7 +5,6 @@ use clap::{Args, Parser, Subcommand};
 use env_logger::{Builder, Env};
 use nix::sys::mman::{MlockAllFlags, mlockall};
 use ublk_vram::{
-    VMemory,
     local::LOBuffer,
     opencl::{CLBuffer, CLBufferConfig, CLDevice, list_opencl_devices},
     start_ublk_server,
@@ -105,7 +104,7 @@ fn main() -> Result<()> {
     }
 
     let _ = match cli.command {
-        Commands::Vmm => start1(cli.size, cli.blocks.max(1).min(100)),
+        Commands::Vmm => start1(cli.size, cli.blocks.clamp(1, 100)),
         Commands::Ocl(ocl) => {
             let mut config: CLBufferConfig = CLBufferConfig {
                 platform_index: ocl.platform,
@@ -121,7 +120,7 @@ fn main() -> Result<()> {
             if ocl.list_devices {
                 return list_opencl_devices(&config);
             }
-            start2(cli.size, cli.blocks.max(1).min(100), config)
+            start2(cli.size, cli.blocks.clamp(1, 100), config)
         }
     };
 
@@ -138,9 +137,10 @@ fn start1(size: u64, blocks: usize) -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let mut vrams: Vec<LOBuffer> = Vec::new();
+    let slice = size.div(blocks as u64) as usize;
     for _ in 0..blocks {
         vrams.push(
-            LOBuffer::new(size.div(blocks as u64) as usize).context("Failed to allocate memory")?,
+            LOBuffer::new(slice).context("Failed to allocate memory")?,
         );
     }
     log::info!(
@@ -150,7 +150,7 @@ fn start1(size: u64, blocks: usize) -> Result<(), Box<dyn std::error::Error>> {
     );
 
     log::info!("Starting VRAM Block Device (UBLK)");
-    start_ublk_server(VMemory::new(vrams))
+    start_ublk_server(vrams.into())
 }
 
 fn start2(
@@ -169,9 +169,10 @@ fn start2(
 
     let device = CLDevice::new(&config).context("Failed to allocate OCL Device")?;
     let mut vrams: Vec<CLBuffer> = Vec::new();
+    let slice = size.div(blocks as u64) as usize;
     for _ in 0..blocks {
         vrams.push(
-            CLBuffer::new(&device, size.div(blocks as u64) as usize, config.mmap)
+            CLBuffer::new(&device, slice, config.mmap)
                 .context("Failed to allocate OCL memory")?,
         );
     }
@@ -184,5 +185,5 @@ fn start2(
     );
 
     log::info!("Starting VRAM Block Device (UBLK)");
-    start_ublk_server(VMemory::new(vrams))
+    start_ublk_server(vrams.into())
 }
