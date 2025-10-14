@@ -12,7 +12,7 @@
 [package]
 edition = "2024"
 name = "ublk-vram"
-version = "0.1.16"
+version = "0.1.17"
 authors = ["Jacky WU <hongzhi.wu@139.com>"]
 build = false
 autolib = false
@@ -40,43 +40,17 @@ path = "src/lib.rs"
 name = "ublk-vram"
 path = "src/main.rs"
 
-[dependencies.anyhow]
-version = "1.0"
-
-[dependencies.clap]
-version = "4.3"
-features = ["derive"]
-
-[dependencies.ctrlc]
-version = "3.4"
-
-[dependencies.env_logger]
-version = "0.11"
-
-[dependencies.futures]
-version = "0.3"
-
-[dependencies.libc]
-version = "0.2"
-
-[dependencies.libublk]
-version = "0.4"
-
-[dependencies.log]
-version = "0.4"
-
-[dependencies.nix]
-version = "0.30"
-features = ["mman"]
-
-[dependencies.num_cpus]
-version = "1.17"
-
-[dependencies.opencl3]
-version = "0.12"
-
-[dependencies.serde_json]
-version = "1.0"
-
-[dependencies.smol]
-version = "2.0"
+[dependencies]
+anyhow = "1.0"
+clap = {version = "4.3", features = ["derive"]}
+ctrlc = "3.4"
+env_logger = "0.11"
+futures = "0.3"
+libc = "0.2"
+libublk = "=0.4.2"
+log = "0.4"
+nix ={version = "0.30", features = ["mman"]}
+num_cpus = "1.17"
+opencl3 = "0.12"
+serde_json = "1.0"
+smol = "2.0"

@@ -1,14 +1,10 @@
 use anyhow::{Ok, Result, bail};
-use std::{
-    alloc::{self, Layout},
-    ptr::NonNull,
-    sync::RwLock,
-};
+use std::sync::RwLock;
 
 use crate::VBuffer;
 
 pub struct LOBuffer {
-    buffer: RwLock<NonNull<u8>>,
+    buffer: RwLock<Vec<u8>>,
     offset: u64,
     size: usize,
 }
@@ -16,11 +12,7 @@ pub struct LOBuffer {
 impl LOBuffer {
     /// Create a new local memory buffer with the specified configuration
     pub fn new(size: usize) -> Result<Self> {
-        let buffer;
-        unsafe {
-            let layout = Layout::from_size_align_unchecked(size, size_of::<usize>());
-            buffer = NonNull::new_unchecked(alloc::alloc_zeroed(layout));
-        }
+        let buffer = vec![0; size];
         log::debug!("Created buffer of size {} bytes on vmm", size);
         Ok(Self {
             buffer: RwLock::new(buffer),
@@ -88,14 +80,14 @@ impl VBuffer for LOBuffer {
         if local_offset + length > self.size {
             bail!("Attempted to write past end of buffer");
         }
-        let buffer_guard = self
+        let mut buffer_guard = self
             .buffer
             .write()
             .map_err(|_| anyhow::anyhow!("Failed to lock buffer RwLock for write"))
             .unwrap();
         unsafe {
             buffer_guard
-                .as_ptr()
+                .as_mut_ptr()
                 .add(local_offset)
                 .copy_from_nonoverlapping(data.as_ptr(), length);
         }
@@ -105,10 +97,6 @@ impl VBuffer for LOBuffer {
 
 impl Drop for LOBuffer {
     fn drop(&mut self) {
-        unsafe {
-            let layout = Layout::from_size_align_unchecked(self.size, size_of::<u64>());
-            alloc::dealloc(self.buffer.get_mut().unwrap().as_ptr(), layout);
-        }
         log::debug!("Freeing memory buffer");
     }
 }
