@@ -12,7 +12,7 @@
 [package]
 edition = "2024"
 name = "ublk-vram"
-version = "0.1.17"
+version = "0.1.18"
 authors = ["Jacky WU <hongzhi.wu@139.com>"]
 build = false
 autolib = false
@@ -47,7 +47,7 @@ ctrlc = "3.4"
 env_logger = "0.11"
 futures = "0.3"
 libc = "0.2"
-libublk = "=0.4.2"
+libublk = "^0.4.2"
 log = "0.4"
 nix ={version = "0.30", features = ["mman"]}
 num_cpus = "1.17"

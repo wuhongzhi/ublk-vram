@@ -83,7 +83,6 @@ where
     let ctrl = Arc::new(
         UblkCtrlBuilder::default()
             .name("ublk-vram")
-            .depth(workers * 64_u16)
             .io_buf_bytes(1024 * 1024)
             .nr_queues(workers)
             .dev_flags(libublk::UblkFlags::UBLK_DEV_F_ADD_DEV)
@@ -104,12 +103,6 @@ where
         // target initialization
         |dev| {
             dev.set_default_params(dev_size);
-            let params = &mut dev.tgt.params;
-            params.types |= sys::UBLK_PARAM_TYPE_DISCARD;
-            let discard = &mut params.discard;
-            discard.discard_granularity = 1 << params.basic.physical_bs_shift;
-            discard.max_discard_sectors = u32::MAX >> 9;
-            discard.max_discard_segments = 1;
             dev.set_target_json(json!({
                 "blocks": dev_blocks
             }));
