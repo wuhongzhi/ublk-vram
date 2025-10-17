@@ -1,15 +1,17 @@
 use crate::{VBuffer, VMemory};
 use anyhow::Result;
 use libublk::{
-    ctrl::UblkCtrlBuilder,
+    BufDesc,
+    ctrl::{UblkCtrl, UblkCtrlBuilder},
     helpers::IoBuf,
     io::{UblkDev, UblkQueue},
     sys,
 };
 use serde_json::json;
-use std::{rc::Rc, sync::Arc};
+use std::sync::Arc;
 
-fn handle_io_cmd<T: VBuffer>(
+// async/.await IO handling
+async fn handle_io_cmd<T: VBuffer>(
     q: &UblkQueue<'_>,
     tag: u16,
     buf: &IoBuf<u8>,
@@ -35,33 +37,33 @@ fn handle_io_cmd<T: VBuffer>(
 }
 
 // implement whole ublk IO level protocol
-async fn io_task<T: VBuffer>(q: &UblkQueue<'_>, tag: u16, vrams: Arc<VMemory<T>>) {
+async fn io_task<T: VBuffer>(
+    q: &UblkQueue<'_>,
+    tag: u16,
+    vrams: Arc<VMemory<T>>,
+) -> Result<(), libublk::UblkError> {
     // IO buffer for exchange data with /dev/ublkbN
     let buf_bytes = q.dev.dev_info.max_io_buf_bytes as usize;
     let buf = libublk::helpers::IoBuf::<u8>::new(buf_bytes);
-    let mut cmd_op = sys::UBLK_U_IO_FETCH_REQ;
-    let mut res = 0;
 
-    // Register IO buffer, so that buffer pages can be discarded
-    // when queue becomes idle
-    q.register_io_buf(tag, &buf);
+    // Submit initial prep command for setup IO forward
+    q.submit_io_prep_cmd(tag, BufDesc::Slice(buf.as_slice()), 0, Some(&buf))
+        .await?;
+
     loop {
-        // Complete previous command with result and re-submit
-        // IO command for fetching new IO request from /dev/ublkbN
-        res = q.submit_io_cmd(tag, cmd_op, buf.as_mut_ptr(), res).await;
-        if res == sys::UBLK_IO_RES_ABORT {
-            break;
-        }
+        // Handle this incoming IO command, whole IO logic
+        let res = handle_io_cmd(&q, tag, &buf, &vrams).await;
 
-        // Handle this incoming IO command
-        res = handle_io_cmd(q, tag, &buf, &vrams);
-        cmd_op = sys::UBLK_U_IO_COMMIT_AND_FETCH_REQ;
+        // Commit result and fetch next IO request
+        q.submit_io_commit_cmd(tag, BufDesc::Slice(buf.as_slice()), res)
+            .await?;
     }
 }
 
 fn q_fn<T: VBuffer>(qid: u16, dev: &UblkDev, vrams: Arc<VMemory<T>>) {
-    let q_rc = Rc::new(UblkQueue::new(qid, dev).unwrap());
-    let exe = smol::LocalExecutor::new();
+    let q_rc = std::rc::Rc::new(UblkQueue::new(qid as u16, &dev).unwrap());
+    let exe_rc = std::rc::Rc::new(smol::LocalExecutor::new());
+    let exe = exe_rc.clone();
     let mut f_vec = Vec::new();
 
     for tag in 0..dev.dev_info.queue_depth {
@@ -71,8 +73,14 @@ fn q_fn<T: VBuffer>(qid: u16, dev: &UblkDev, vrams: Arc<VMemory<T>>) {
     }
 
     // Drive smol executor, won't exit until queue is dead
-    libublk::uring_async::ublk_wait_and_handle_ios(&exe, &q_rc);
-    smol::block_on(async { futures::future::join_all(f_vec).await });
+    smol::block_on(exe_rc.run(async move {
+        let run_ops = || while exe.try_tick() {};
+        let done = || f_vec.iter().all(|task| task.is_finished());
+
+        if let Err(e) = libublk::wait_and_handle_io_events(&q_rc, Some(20), run_ops, done).await {
+            log::error!("handle_uring_events failed: {}", e);
+        }
+    }));
 }
 pub fn start_ublk_server<T>(vrams: VMemory<T>) -> Result<(), Box<dyn std::error::Error>>
 where
@@ -91,7 +99,10 @@ where
     // Kill ublk device by handling "Ctrl + C"
     let ctrl_sig = ctrl.clone();
     let _ = ctrlc::set_handler(move || {
-        ctrl_sig.kill_dev().unwrap();
+        let id = ctrl_sig.dev_info().dev_id;
+        if let Ok(ctrl) = UblkCtrl::new_simple(id as i32) {
+            let _ = ctrl.kill_dev();
+        }
     });
 
     // compute vram sets
