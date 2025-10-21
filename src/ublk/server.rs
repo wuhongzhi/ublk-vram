@@ -10,8 +10,8 @@ use libublk::{
 use serde_json::json;
 use std::sync::Arc;
 
-// async/.await IO handling
-async fn handle_io_cmd<T: VBuffer>(
+//IO handling
+fn handle_io_cmd<T: VBuffer>(
     q: &UblkQueue<'_>,
     tag: u16,
     buf: &IoBuf<u8>,
@@ -52,7 +52,7 @@ async fn io_task<T: VBuffer>(
 
     loop {
         // Handle this incoming IO command, whole IO logic
-        let res = handle_io_cmd(&q, tag, &buf, &vrams).await;
+        let res = handle_io_cmd(q, tag, &buf, &vrams);
 
         // Commit result and fetch next IO request
         q.submit_io_commit_cmd(tag, BufDesc::Slice(buf.as_slice()), res)
@@ -61,7 +61,7 @@ async fn io_task<T: VBuffer>(
 }
 
 fn q_fn<T: VBuffer>(qid: u16, dev: &UblkDev, vrams: Arc<VMemory<T>>) {
-    let q_rc = std::rc::Rc::new(UblkQueue::new(qid as u16, &dev).unwrap());
+    let q_rc = std::rc::Rc::new(UblkQueue::new(qid, dev).unwrap());
     let exe_rc = std::rc::Rc::new(smol::LocalExecutor::new());
     let exe = exe_rc.clone();
     let mut f_vec = Vec::new();
